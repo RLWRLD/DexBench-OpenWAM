@@ -27,6 +27,10 @@ RoboDojo trains through OpenWAM but evaluates through the external
 [XPolicyLab](https://github.com/XPolicyLab/XPolicyLab) repository — see
 [robodojo/README.md](robodojo/README.md).
 
+DexBench trains through OpenWAM and is served to DexBench's own HTTP client
+by [dexbench/server.py](dexbench/server.py), not over this WebSocket protocol
+— see [dexbench/README.md](dexbench/README.md).
+
 ## 1. What the client sends
 
 One call per control step: up to three lossless PNG camera frames + the task `prompt` — the exact string the model should see (the server forwards it verbatim; wrap it in your checkpoint's template first). Proprioceptive checkpoints also require a raw `state` vector whose length matches the checkpoint's `model.architecture.state_dim`.

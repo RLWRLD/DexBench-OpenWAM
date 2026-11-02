@@ -1,0 +1,87 @@
+type: dexbench
+
+# One DexBench task set in the 62-joint LeRobot v3 layout with four cameras
+# (for example a task's `lerobot/cosmos_62d_320x180_4cam` set). See
+# benchmarks/dexbench/README.md for the data contract. One task set per run.
+dataset_dir: /path/to/dexbench_task_set
+
+# ── Action space ─────────────────────────────────────────────────────────────
+# 62 absolute joint positions (radians), normalized, then scattered into the
+# shared 80-D vector (layout in configs/dataloader/robotwin.yaml):
+#   raw [ 0: 7) left arm   -> unified  0-6   (left EEF pose slots)
+#   raw [ 7:14) right arm  -> unified 34-40  (right EEF pose slots)
+#   raw [14:16) head       -> unified 68, 69 (reserved)
+#   raw [16:56) hands      -> left hand 10-33 / right hand 44-67, finger f and
+#                             stage s at 10 + 4f + s (left) or 44 + 4f + s (right)
+#   raw [56:62) torso      -> unified 70-75  (reserved)
+# Gripper slots 9/43, EEF slots 7, 8, 41, 42, hand slots 30-33 / 64-67 and
+# reserved 76-79 stay unmapped (masked out of the loss).
+action_mode: dexbench_joint62
+unify_action: true
+unify_action_map: [
+  "0-6", "34-40", 68, 69,
+  10, 14, 18, 22, 26, 44, 48, 52, 56, 60,   # stage 0: thumb cmc_flex, finger mcp_flex
+  11, 15, 19, 23, 27, 45, 49, 53, 57, 61,   # stage 1: thumb cmc_abd, finger mcp_abd
+  12, 16, 20, 24, 28, 46, 50, 54, 58, 62,   # stage 2: thumb mcp, finger pip
+  13, 17, 21, 25, 29, 47, 51, 55, 59, 63,   # stage 3: thumb ip, finger dip
+  "70-75",
+]
+unify_state_map: null  # null = state reuses unify_action_map
+
+# The task set's action names, in order. The reader refuses a set whose
+# meta/info.json lists other joints or another order, and the checkpoint's
+# saved config carries this list to the deploy server.
+joint_names: [
+  left_arm_0, left_arm_1, left_arm_2, left_arm_3, left_arm_4, left_arm_5, left_arm_6,
+  right_arm_0, right_arm_1, right_arm_2, right_arm_3, right_arm_4, right_arm_5, right_arm_6,
+  head_0, head_1,
+  left_thumb_cmc_flex, left_index_finger_mcp_flex, left_middle_finger_mcp_flex, left_ring_finger_mcp_flex, left_pinky_mcp_flex,
+  right_thumb_cmc_flex, right_index_finger_mcp_flex, right_middle_finger_mcp_flex, right_ring_finger_mcp_flex, right_pinky_mcp_flex,
+  left_thumb_cmc_abd, left_index_finger_mcp_abd, left_middle_finger_mcp_abd, left_ring_finger_mcp_abd, left_pinky_mcp_abd,
+  right_thumb_cmc_abd, right_index_finger_mcp_abd, right_middle_finger_mcp_abd, right_ring_finger_mcp_abd, right_pinky_mcp_abd,
+  left_thumb_mcp, left_index_finger_pip, left_middle_finger_pip, left_ring_finger_pip, left_pinky_pip,
+  right_thumb_mcp, right_index_finger_pip, right_middle_finger_pip, right_ring_finger_pip, right_pinky_pip,
+  left_thumb_ip, left_index_finger_dip, left_middle_finger_dip, left_ring_finger_dip, left_pinky_dip,
+  right_thumb_ip, right_index_finger_dip, right_middle_finger_dip, right_ring_finger_dip, right_pinky_dip,
+  torso_0, torso_1, torso_2, torso_3, torso_4, torso_5,
+]
+
+# ── Frame sampling ───────────────────────────────────────────────────────────
+# num_frames = state/action window length; action horizon = num_frames - 1.
+# video_stride subsamples video only (9 frames per window at 30 fps).
+fps: 30           # the task set's control rate; the reader checks meta/info.json
+num_frames: 33
+video_stride: 4
+window_stride: 1
+split: train
+
+# ── Rendering (3-slot L-shape canvas) ────────────────────────────────────────
+# camera_layout = [head, bottom-left, bottom-right]. At 384x320 the head slot
+# is 256Hx320W and each wrist slot 128Hx160W; every decoded frame is LANCZOS-
+# resized to its slot before composition. camera_frame_hw is the stored frame
+# size of these videos (the reader checks meta/info.json); the deploy server
+# asks the evaluation client for frames of this size.
+height: 384
+width: 320
+multiview: true
+camera_layout: [
+  observation.images.camera_ego_left,
+  observation.images.camera_wrist_left,
+  observation.images.camera_wrist_right,
+]
+camera_frame_hw: [180, 320]
+
+# ── Normalization ────────────────────────────────────────────────────────────
+# min-max → [-1, 1] with clipping, per dimension, with separate action and
+# state statistics. The stats file
+# <dataset_dir>/meta/dexbench_normalization_stats.npy is auto-built on first
+# load (rank 0 scans, other ranks wait) and copied into every checkpoint.
+normalize_mode: min-max
+
+# ── Video augmentation (optional) ────────────────────────────────────────────
+color_jitter:
+  enabled: false
+  brightness: 0.2
+  contrast: 0.2
+  saturation: 0.2
+  hue: 0.0
