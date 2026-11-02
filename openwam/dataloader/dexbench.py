@@ -55,12 +55,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from openwam.dataloader.bases import LeRobotV3Reader
 from openwam.dataloader.utils.normalization import apply_normalization, load_stats_file
@@ -206,6 +208,60 @@ class DexBenchDataset(LeRobotV3Reader):
         # checkpoint saving copies it as normalization_stats.npy.
         self.normalization_stats_path = str(path)
         return action_stats
+
+    # ----- offsets ----------------------------------------------------------
+
+    def _add_data_offsets(self, eps: pd.DataFrame) -> None:
+        """Place each episode's rows by the ``index`` range each data file holds.
+
+        Sets converted from LeRobot v2.1 with LeRobot before 0.5.0 list the first episode
+        of each new data file under the previous file in ``meta/episodes``
+        (huggingface/lerobot#2401), while every ``dataset_from_index`` is right. The base
+        reader sums ``length`` per listed file, which sends that episode past the end of
+        its file and every later episode of the next file into its neighbour's rows. The
+        data files' own ``index`` column gives each file's global row range, so the listed
+        file is not used.
+        """
+        files = sorted((self._dataset_dir / "data").glob("chunk-*/file-*.parquet"))
+        if not files or "index" not in pq.read_schema(files[0]).names:
+            super()._add_data_offsets(eps)
+            return
+        firsts, ends, shards = [], [], []
+        for path in files:
+            index = pq.read_table(path, columns=["index"]).column("index").to_numpy()
+            if len(index) and not np.array_equal(index, np.arange(index[0], index[0] + len(index))):
+                raise ValueError(f"{self.DATASET_NAME}({self._dataset_id}): {path} rows are not one index range")
+            shard = re.fullmatch(r"chunk-(\d+)/file-(\d+)\.parquet", f"{path.parent.name}/{path.name}")
+            firsts.append(int(index[0]) if len(index) else 0)
+            ends.append(int(index[0]) + len(index) if len(index) else 0)
+            shards.append((int(shard.group(1)), int(shard.group(2))))
+        order = np.argsort(firsts)
+        firsts, ends = np.asarray(firsts)[order], np.asarray(ends)[order]
+        shards = [shards[i] for i in order]
+        begin = eps["dataset_from_index"].to_numpy().astype(np.int64)
+        end = eps["dataset_to_index"].to_numpy().astype(np.int64)
+        where = np.searchsorted(firsts, begin, side="right") - 1
+        outside = (where < 0) | (end > ends[np.clip(where, 0, None)])
+        if outside.any():
+            raise ValueError(
+                f"{self.DATASET_NAME}({self._dataset_id}): episodes "
+                f"{eps['episode_index'].to_numpy()[outside][:5].tolist()} lie outside every data file"
+            )
+        chunk = np.asarray([shards[w][0] for w in where], dtype=np.int64)
+        file = np.asarray([shards[w][1] for w in where], dtype=np.int64)
+        moved = (eps["data/chunk_index"].to_numpy() != chunk) | (eps["data/file_index"].to_numpy() != file)
+        if moved.any():
+            logger.warning(
+                "%s(%s): meta/episodes lists %d episodes under another data file (e.g. episode %d); "
+                "placing them by the files' index ranges",
+                self.DATASET_NAME,
+                self._dataset_id,
+                int(moved.sum()),
+                int(eps["episode_index"].to_numpy()[moved][0]),
+            )
+        eps["data/chunk_index"] = chunk
+        eps["data/file_index"] = file
+        eps["_data_row_offset"] = begin - firsts[where]
 
     # ----- payloads ---------------------------------------------------------
 

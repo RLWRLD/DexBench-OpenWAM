@@ -39,6 +39,13 @@ DexBench publishes each task's demonstrations in this layout as
 it reorders the joints and area-downscales the simulator's 640×360 renders to
 320×180.
 
+The reader finds each episode's rows from the `index` range each data parquet
+holds, not from `data/file_index` in `meta/episodes`. Sets converted from
+LeRobot v2.1 with LeRobot before 0.5.0 list the first episode of each new data
+file under the previous file
+([huggingface/lerobot#2401](https://github.com/huggingface/lerobot/issues/2401));
+the reader logs a warning for such episodes and reads their rows correctly.
+
 The joint order is:
 
 | Group | Slice | Joint order |

@@ -13,6 +13,8 @@ import shutil
 from unittest.mock import patch
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from omegaconf import OmegaConf
 from PIL import Image
@@ -107,6 +109,27 @@ def test_canvas_is_ego_left_head_and_both_wrists(bucket):
         tiles = {c: source_frame(c, index).resize(size, Image.LANCZOS) for c, size in sizes.items()}
         expected = assemble_multiview_layout(tiles, cams, out_h=384, out_w=320)
         assert np.array_equal(np.asarray(frame), np.asarray(expected))
+
+
+def test_rows_come_from_the_index_ranges_not_the_listed_data_file(bucket):
+    # As in published sets: episode 1 starts data file 1, but meta/episodes lists it under file 0.
+    root, raw = bucket
+    path = root / "data" / "chunk-000" / "file-000.parquet"
+    data = pq.read_table(path).to_pandas()
+    data["index"] = np.arange(len(data))
+    pq.write_table(pa.Table.from_pandas(data.iloc[: LENGTHS[0]], preserve_index=False), path)
+    pq.write_table(
+        pa.Table.from_pandas(data.iloc[LENGTHS[0] :], preserve_index=False), path.with_name("file-001.parquet")
+    )
+    ds = _build(root)
+    eps = ds._eps_df.sort_values("episode_index")
+    assert eps["data/file_index"].tolist() == [0, 1]
+    assert eps["_data_row_offset"].tolist() == [0, 0]
+    for _, row in eps.iterrows():
+        table = ds._load_data_table(int(row["data/chunk_index"]), int(row["data/file_index"]))
+        rows = table.slice(int(row["_data_row_offset"]), int(row["length"])).to_pandas()
+        start = int(raw["starts"][int(row["episode_index"])])
+        np.testing.assert_array_equal(np.stack(rows["action"]), raw["action"][start : start + int(row["length"])])
 
 
 def test_wrist_decode_failure_is_not_a_black_slot(bucket):
